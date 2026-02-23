@@ -1,0 +1,28 @@
+service:
+  name: orchestrator
+  port: 50051
+
+redis:
+  address: "redis:6379"
+  password: ""
+  ttl: 3600s
+
+services:
+  classifier:
+    address: "classifier:50052"
+    timeout: 500ms
+    retries: 2
+  extractor:
+    address: "extractor:50053"
+    timeout: 500ms
+    retries: 2
+  weather:
+    address: "weather:50054"
+    timeout: 800ms
+    retries: 2
+
+otel:
+  exporter: "otlp_http"
+  jaeger_endpoint: "jaeger:4318"
+  sample_rate: 1.0
+

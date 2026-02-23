@@ -1,0 +1,41 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build cache & coverage
+*.cover
+*.coverprofile
+coverage.*
+
+# Vendor (if used)
+vendor/
+
+# Logs and temp files
+*.log
+tmp/
+*.tmp
+*.swp
+*.swo
+
+# IDE / editor configs
+.vscode/
+.idea/
+*.iml
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+
+# Docker
+*.pid
+

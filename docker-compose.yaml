@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  classifier:
+    build:
+      context: .
+      dockerfile: services/classifier/Dockerfile
+    container_name: nlp-classifier
+    ports:
+      - "50052:50052"
+
+  extractor:
+    build:
+      context: .
+      dockerfile: services/extractor/Dockerfile
+    container_name: nlp-extractor
+    ports:
+      - "50053:50053"
+
+  weather:
+    build:
+      context: .
+      dockerfile: services/weather/Dockerfile
+    container_name: nlp-weather
+    ports:
+      - "50054:50054"
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    container_name: nlp-orchestrator
+    depends_on:
+      - classifier
+      - extractor
+      - weather
+      - jaeger
+    environment:
+      - ORCHESTRATOR_CONFIG=/app/config/orchestrator.yaml
+    ports:
+      - "50051:50051"
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: nlp-jaeger
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP HTTP
+

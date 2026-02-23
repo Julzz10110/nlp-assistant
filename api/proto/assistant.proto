@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package assistant;
+
+option go_package = "github.com/Julzz10110/nlp-assistant/api/proto/assistantpb;assistantpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ===================== API Gateway / Orchestrator interface =====================
+// For MVP clients talk directly to the orchestrator (Gateway may proxy the same contract).
+
+service ConversationOrchestrator {
+  // Main bidirectional conversation stream
+  rpc Converse(stream ClientMessage) returns (stream ServerMessage);
+
+  // Get conversation history
+  rpc GetHistory(HistoryRequest) returns (HistoryResponse);
+}
+
+message ClientMessage {
+  string session_id = 1;
+  string user_id = 2;
+  string text = 3;
+  map<string, string> context = 4; // Additional metadata (location, time, etc.)
+  google.protobuf.Timestamp sent_at = 5;
+}
+
+message ServerMessage {
+  string session_id = 1;
+  oneof payload {
+    TextResponse text = 2;
+    SuggestionResponse suggestions = 3;
+    ActionResponse action = 4;
+    ErrorResponse error = 5;
+    ConfirmationRequest confirmation = 6;
+  }
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message TextResponse {
+  string text = 1;
+}
+
+message SuggestionResponse {
+  repeated string suggestions = 1;
+}
+
+message ActionResponse {
+  string action_name = 1;
+  map<string, string> payload = 2;
+}
+
+message ErrorResponse {
+  string code = 1;
+  string message = 2;
+}
+
+message ConfirmationRequest {
+  string question = 1;
+  map<string, string> entities = 2;
+}
+
+message HistoryRequest {
+  string session_id = 1;
+  string user_id = 2;
+}
+
+message HistoryResponse {
+  repeated ClientMessage messages = 1;
+}
+
+// ===================== Intent Classifier =====================
+
+service IntentClassifier {
+  rpc Classify(ClassifyRequest) returns (ClassifyResponse);
+}
+
+message ClassifyRequest {
+  string utterance = 1;
+  repeated string previous_intents = 2;
+}
+
+message ClassifyResponse {
+  string intent_name = 1;
+  float confidence = 2;
+  repeated string required_entities = 3;
+}
+
+// ===================== Entity Extractor =====================
+
+service EntityExtractor {
+  rpc Extract(ExtractRequest) returns (ExtractResponse);
+}
+
+message ExtractRequest {
+  string utterance = 1;
+  string intent = 2;
+  map<string, string> existing_entities = 3;
+}
+
+message ExtractResponse {
+  map<string, EntityValue> entities = 1;
+}
+
+message EntityValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    TimestampValue timestamp = 5;
+  }
+  float confidence = 6;
+  string source_text = 7;
+}
+
+message TimestampValue {
+  google.protobuf.Timestamp value = 1;
+}
+
+// ===================== Weather business service =====================
+
+service WeatherService {
+  rpc GetWeather(WeatherRequest) returns (WeatherResponse);
+}
+
+message WeatherRequest {
+  string user_id = 1;
+  string location = 2;
+  google.protobuf.Timestamp date = 3;
+}
+
+message WeatherResponse {
+  string location = 1;
+  google.protobuf.Timestamp date = 2;
+  string summary = 3;
+  double temperature_c = 4;
+}
+
