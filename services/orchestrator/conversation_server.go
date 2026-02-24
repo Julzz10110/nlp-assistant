@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -117,8 +118,12 @@ func (s *ConversationServer) handleClientMessage(ctx context.Context, msg *assis
 	switch state.Status {
 	case StatusNew, StatusCompleted:
 		return s.processNewOrCompleted(ctx, state, msg)
-	case StatusProcessing, StatusCollecting, StatusConfirming:
-		return s.processOngoing(ctx, state, msg)
+	case StatusProcessing:
+		return s.processNewOrCompleted(ctx, state, msg)
+	case StatusCollecting:
+		return s.processCollecting(ctx, state, msg)
+	case StatusConfirming:
+		return s.processConfirming(ctx, state, msg)
 	default:
 		return s.errorMessage(msg.GetSessionId(), "invalid_state", "unknown dialog state"), nil
 	}
@@ -160,7 +165,7 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 			SessionId: state.SessionID,
 			Payload: &assistantpb.ServerMessage_Text{
 				Text: &assistantpb.TextResponse{
-					Text: "Пока я умею только рассказывать о погоде.",
+					Text: "For now I can only answer weather questions.",
 				},
 			},
 		}
@@ -173,8 +178,7 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 }
 
 func (s *ConversationServer) processOngoing(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
-	// For MVP: treat every incoming message as a new turn.
-	state.Status = StatusProcessing
+	// Deprecated path, kept for backward compatibility. New logic branches on explicit states.
 	return s.processNewOrCompleted(ctx, state, msg)
 }
 
@@ -186,7 +190,8 @@ func (s *ConversationServer) handleWeatherIntent(ctx context.Context, state *Ses
 		}
 	}
 	if location == "" {
-		// Simple clarification question without full COLLECTING logic.
+		// Simple clarification question; switch FSM into COLLECTING state.
+		state.MissingEntities = []string{"location"}
 		state.Status = StatusCollecting
 		return &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
@@ -236,4 +241,112 @@ func (s *ConversationServer) errorMessage(sessionID, code, msg string) *assistan
 		},
 	}
 }
+
+// processCollecting handles dialog turns when we are missing some entities for the current intent.
+// For Phase 1 it only collects the "location" entity for the weather intent.
+func (s *ConversationServer) processCollecting(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	// Re-run entity extraction using the latest user utterance and merge entities.
+	extractResp, err := s.extractor.Extract(ctx, &assistantpb.ExtractRequest{
+		Utterance:        msg.GetText(),
+		Intent:           state.CurrentIntent,
+		ExistingEntities: map[string]string{},
+	})
+	if err != nil {
+		return s.errorMessage(state.SessionID, "extractor_unavailable", "extractor service error during entity collection"), err
+	}
+
+	for k, v := range extractResp.Entities {
+		state.Entities[k] = v
+	}
+
+	// Check whether we now have a location.
+	location := ""
+	if v, ok := state.Entities["location"]; ok {
+		if strVal := v.GetStringValue(); strVal != "" {
+			location = strVal
+		}
+	}
+
+	if location == "" {
+		// Still missing location – stay in COLLECTING and ask again.
+		state.Status = StatusCollecting
+		state.MissingEntities = []string{"location"}
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Confirmation{
+				Confirmation: &assistantpb.ConfirmationRequest{
+					Question: "I still do not see the location. For which location do you need the weather?",
+				},
+			},
+		}, s.stateStore.SaveSession(ctx, state)
+	}
+
+	// We have all required entities for weather – move to CONFIRMING.
+	state.Status = StatusConfirming
+	state.MissingEntities = nil
+
+	question := "You want to know the weather in " + location + ". Is that correct? (yes/no)"
+	if err := s.stateStore.SaveSession(ctx, state); err != nil {
+		return s.errorMessage(state.SessionID, "internal", "failed to save session state"), err
+	}
+
+	return &assistantpb.ServerMessage{
+		SessionId: state.SessionID,
+		Payload: &assistantpb.ServerMessage_Confirmation{
+			Confirmation: &assistantpb.ConfirmationRequest{
+				Question: question,
+			},
+		},
+	}, nil
+}
+
+// processConfirming handles yes/no answers when the system asks for confirmation.
+func (s *ConversationServer) processConfirming(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	answer := strings.TrimSpace(strings.ToLower(msg.GetText()))
+
+	isYes := answer == "yes" || answer == "y" || answer == "yeah" || answer == "ok" || answer == "okay" || answer == "sure"
+	isNo := answer == "no" || answer == "n" || answer == "nope"
+
+	if !isYes && !isNo {
+		// Ask the user to answer explicitly with yes or no.
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Confirmation{
+				Confirmation: &assistantpb.ConfirmationRequest{
+					Question: "Please answer with \"yes\" or \"no\".",
+				},
+			},
+		}, nil
+	}
+
+	if isNo {
+		// Reset collected entities and go back to COLLECTING.
+		delete(state.Entities, "location")
+		state.Status = StatusCollecting
+		state.MissingEntities = []string{"location"}
+
+		if err := s.stateStore.SaveSession(ctx, state); err != nil {
+			return s.errorMessage(state.SessionID, "internal", "failed to save session state"), err
+		}
+
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Confirmation{
+				Confirmation: &assistantpb.ConfirmationRequest{
+					Question: "Okay, then for which location do you need the weather?",
+				},
+			},
+		}, nil
+	}
+
+	// isYes: execute the intent using the already collected entities.
+	resp, err := s.handleWeatherIntent(ctx, state, msg)
+	if err != nil {
+		return resp, err
+	}
+
+	// handleWeatherIntent already sets the status and saves the session.
+	return resp, nil
+}
+
 

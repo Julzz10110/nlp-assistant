@@ -34,6 +34,7 @@ services:
       - classifier
       - extractor
       - weather
+      - redis
       - jaeger
     environment:
       - ORCHESTRATOR_CONFIG=/app/config/orchestrator.yaml
@@ -46,4 +47,10 @@ services:
     ports:
       - "16686:16686" # UI
       - "4318:4318"   # OTLP HTTP
+
+  redis:
+    image: redis:7-alpine
+    container_name: nlp-redis
+    ports:
+      - "6379:6379"
 

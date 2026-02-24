@@ -92,7 +92,16 @@ func main() {
 	}
 	defer weatherConn.Close()
 
-	stateStore := NewInMemoryStateStore()
+	var stateStore StateStore = NewInMemoryStateStore()
+	if cfg.Redis.Address != "" {
+		redisStore := NewRedisStateStore(cfg)
+		if err := redisStore.Ping(ctx); err != nil {
+			logger.WithError(err).Warn("failed to connect Redis, falling back to in-memory state store")
+		} else {
+			logger.WithField("addr", cfg.Redis.Address).Info("using Redis state store")
+			stateStore = redisStore
+		}
+	}
 
 	server := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
