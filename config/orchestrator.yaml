@@ -20,6 +20,10 @@ services:
     address: "weather:50054"
     timeout: 800ms
     retries: 2
+  reminder:
+    address: "reminder:50055"
+    timeout: 800ms
+    retries: 2
 
 otel:
   exporter: "otlp_http"

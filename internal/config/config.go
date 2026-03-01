@@ -38,6 +38,7 @@ type OrchestratorConfig struct {
 		Classifier GRPCServiceClientConfig `yaml:"classifier"`
 		Extractor  GRPCServiceClientConfig `yaml:"extractor"`
 		Weather    GRPCServiceClientConfig `yaml:"weather"`
+		Reminder   GRPCServiceClientConfig `yaml:"reminder"`
 	} `yaml:"services"`
 
 	OTEL OTELConfig `yaml:"otel"`

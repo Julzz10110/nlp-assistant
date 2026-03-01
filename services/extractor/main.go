@@ -36,6 +36,18 @@ func (s *server) Extract(ctx context.Context, req *assistantpb.ExtractRequest) (
 		}
 	}
 
+	// For create_reminder intent, use the whole utterance as reminder text
+	// (in a real system this would be more sophisticated).
+	if req.GetIntent() == "create_reminder" {
+		entities["text"] = &assistantpb.EntityValue{
+			Value: &assistantpb.EntityValue_StringValue{
+				StringValue: req.GetUtterance(),
+			},
+			Confidence: 1.0,
+			SourceText: req.GetUtterance(),
+		}
+	}
+
 	s.logger.WithFields(logrus.Fields{
 		"utterance": text,
 		"entities":  len(entities),

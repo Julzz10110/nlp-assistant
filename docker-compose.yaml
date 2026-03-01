@@ -25,6 +25,14 @@ services:
     ports:
       - "50054:50054"
 
+  reminder:
+    build:
+      context: .
+      dockerfile: services/reminder/Dockerfile
+    container_name: nlp-reminder
+    ports:
+      - "50055:50055"
+
   orchestrator:
     build:
       context: .

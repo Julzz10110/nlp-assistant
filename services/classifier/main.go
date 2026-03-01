@@ -30,6 +30,9 @@ func (s *server) Classify(ctx context.Context, req *assistantpb.ClassifyRequest)
 	if strings.Contains(text, "weather") || strings.Contains(text, "rain") {
 		intent = "get_weather"
 		required = []string{"location"}
+	} else if strings.Contains(text, "remind") || strings.Contains(text, "reminder") {
+		intent = "create_reminder"
+		required = []string{"text"}
 	}
 
 	s.logger.WithFields(logrus.Fields{

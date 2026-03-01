@@ -27,9 +27,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ConversationOrchestratorClient interface {
-	// Основной диалоговый поток
+	// Main bidirectional conversation stream
 	Converse(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ClientMessage, ServerMessage], error)
-	// Получение истории диалога
+	// Get conversation history
 	GetHistory(ctx context.Context, in *HistoryRequest, opts ...grpc.CallOption) (*HistoryResponse, error)
 }
 
@@ -68,9 +68,9 @@ func (c *conversationOrchestratorClient) GetHistory(ctx context.Context, in *His
 // All implementations must embed UnimplementedConversationOrchestratorServer
 // for forward compatibility.
 type ConversationOrchestratorServer interface {
-	// Основной диалоговый поток
+	// Main bidirectional conversation stream
 	Converse(grpc.BidiStreamingServer[ClientMessage, ServerMessage]) error
-	// Получение истории диалога
+	// Get conversation history
 	GetHistory(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	mustEmbedUnimplementedConversationOrchestratorServer()
 }
@@ -458,6 +458,184 @@ var WeatherService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWeather",
 			Handler:    _WeatherService_GetWeather_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api/proto/assistant.proto",
+}
+
+const (
+	ReminderService_CreateReminder_FullMethodName = "/assistant.ReminderService/CreateReminder"
+	ReminderService_ListReminders_FullMethodName  = "/assistant.ReminderService/ListReminders"
+	ReminderService_CancelReminder_FullMethodName = "/assistant.ReminderService/CancelReminder"
+)
+
+// ReminderServiceClient is the client API for ReminderService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ReminderServiceClient interface {
+	CreateReminder(ctx context.Context, in *CreateReminderRequest, opts ...grpc.CallOption) (*CreateReminderResponse, error)
+	ListReminders(ctx context.Context, in *ListRemindersRequest, opts ...grpc.CallOption) (*ListRemindersResponse, error)
+	CancelReminder(ctx context.Context, in *CancelReminderRequest, opts ...grpc.CallOption) (*CancelReminderResponse, error)
+}
+
+type reminderServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewReminderServiceClient(cc grpc.ClientConnInterface) ReminderServiceClient {
+	return &reminderServiceClient{cc}
+}
+
+func (c *reminderServiceClient) CreateReminder(ctx context.Context, in *CreateReminderRequest, opts ...grpc.CallOption) (*CreateReminderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateReminderResponse)
+	err := c.cc.Invoke(ctx, ReminderService_CreateReminder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *reminderServiceClient) ListReminders(ctx context.Context, in *ListRemindersRequest, opts ...grpc.CallOption) (*ListRemindersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRemindersResponse)
+	err := c.cc.Invoke(ctx, ReminderService_ListReminders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *reminderServiceClient) CancelReminder(ctx context.Context, in *CancelReminderRequest, opts ...grpc.CallOption) (*CancelReminderResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelReminderResponse)
+	err := c.cc.Invoke(ctx, ReminderService_CancelReminder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ReminderServiceServer is the server API for ReminderService service.
+// All implementations must embed UnimplementedReminderServiceServer
+// for forward compatibility.
+type ReminderServiceServer interface {
+	CreateReminder(context.Context, *CreateReminderRequest) (*CreateReminderResponse, error)
+	ListReminders(context.Context, *ListRemindersRequest) (*ListRemindersResponse, error)
+	CancelReminder(context.Context, *CancelReminderRequest) (*CancelReminderResponse, error)
+	mustEmbedUnimplementedReminderServiceServer()
+}
+
+// UnimplementedReminderServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedReminderServiceServer struct{}
+
+func (UnimplementedReminderServiceServer) CreateReminder(context.Context, *CreateReminderRequest) (*CreateReminderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateReminder not implemented")
+}
+func (UnimplementedReminderServiceServer) ListReminders(context.Context, *ListRemindersRequest) (*ListRemindersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListReminders not implemented")
+}
+func (UnimplementedReminderServiceServer) CancelReminder(context.Context, *CancelReminderRequest) (*CancelReminderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelReminder not implemented")
+}
+func (UnimplementedReminderServiceServer) mustEmbedUnimplementedReminderServiceServer() {}
+func (UnimplementedReminderServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeReminderServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ReminderServiceServer will
+// result in compilation errors.
+type UnsafeReminderServiceServer interface {
+	mustEmbedUnimplementedReminderServiceServer()
+}
+
+func RegisterReminderServiceServer(s grpc.ServiceRegistrar, srv ReminderServiceServer) {
+	// If the following call pancis, it indicates UnimplementedReminderServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ReminderService_ServiceDesc, srv)
+}
+
+func _ReminderService_CreateReminder_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateReminderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReminderServiceServer).CreateReminder(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ReminderService_CreateReminder_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReminderServiceServer).CreateReminder(ctx, req.(*CreateReminderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ReminderService_ListReminders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRemindersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReminderServiceServer).ListReminders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ReminderService_ListReminders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReminderServiceServer).ListReminders(ctx, req.(*ListRemindersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ReminderService_CancelReminder_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelReminderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReminderServiceServer).CancelReminder(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ReminderService_CancelReminder_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReminderServiceServer).CancelReminder(ctx, req.(*CancelReminderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ReminderService_ServiceDesc is the grpc.ServiceDesc for ReminderService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ReminderService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "assistant.ReminderService",
+	HandlerType: (*ReminderServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateReminder",
+			Handler:    _ReminderService_CreateReminder_Handler,
+		},
+		{
+			MethodName: "ListReminders",
+			Handler:    _ReminderService_ListReminders_Handler,
+		},
+		{
+			MethodName: "CancelReminder",
+			Handler:    _ReminderService_CancelReminder_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

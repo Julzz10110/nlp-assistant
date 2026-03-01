@@ -80,6 +80,18 @@ func main() {
 	}
 	defer extractorConn.Close()
 
+	reminderConn, err := grpc.DialContext(
+		ctx,
+		cfg.Services.Reminder.Address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	)
+	if err != nil {
+		logger.WithError(err).Fatal("failed to connect reminder service")
+	}
+	defer reminderConn.Close()
+
 	weatherConn, err := grpc.DialContext(
 		ctx,
 		cfg.Services.Weather.Address,
@@ -113,6 +125,7 @@ func main() {
 		assistantpb.NewIntentClassifierClient(classifierConn),
 		assistantpb.NewEntityExtractorClient(extractorConn),
 		assistantpb.NewWeatherServiceClient(weatherConn),
+		assistantpb.NewReminderServiceClient(reminderConn),
 	)
 	assistantpb.RegisterConversationOrchestratorServer(server, orchestratorSrv)
 

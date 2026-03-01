@@ -18,11 +18,12 @@ import (
 type ConversationServer struct {
 	assistantpb.UnimplementedConversationOrchestratorServer
 
-	logger        *logrus.Logger
-	stateStore    StateStore
-	classifier    assistantpb.IntentClassifierClient
-	extractor     assistantpb.EntityExtractorClient
-	weatherClient assistantpb.WeatherServiceClient
+	logger         *logrus.Logger
+	stateStore     StateStore
+	classifier     assistantpb.IntentClassifierClient
+	extractor      assistantpb.EntityExtractorClient
+	weatherClient  assistantpb.WeatherServiceClient
+	reminderClient assistantpb.ReminderServiceClient
 }
 
 func NewConversationServer(
@@ -31,13 +32,15 @@ func NewConversationServer(
 	classifier assistantpb.IntentClassifierClient,
 	extractor assistantpb.EntityExtractorClient,
 	weather assistantpb.WeatherServiceClient,
+	reminder assistantpb.ReminderServiceClient,
 ) *ConversationServer {
 	return &ConversationServer{
-		logger:        logger,
-		stateStore:    stateStore,
-		classifier:    classifier,
-		extractor:     extractor,
-		weatherClient: weather,
+		logger:         logger,
+		stateStore:     stateStore,
+		classifier:     classifier,
+		extractor:      extractor,
+		weatherClient:  weather,
+		reminderClient: reminder,
 	}
 }
 
@@ -156,16 +159,18 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 		state.Entities[k] = v
 	}
 
-	// For Phase 1 we only support the weather intent.
 	var serverMsg *assistantpb.ServerMessage
-	if classResp.GetIntentName() == "get_weather" {
+	switch classResp.GetIntentName() {
+	case "get_weather":
 		serverMsg, err = s.handleWeatherIntent(ctx, state, msg)
-	} else {
+	case "create_reminder":
+		serverMsg, err = s.handleReminderIntent(ctx, state, msg)
+	default:
 		serverMsg = &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
 			Payload: &assistantpb.ServerMessage_Text{
 				Text: &assistantpb.TextResponse{
-					Text: "For now I can only answer weather questions.",
+					Text: "For now I can answer weather and reminder questions.",
 				},
 			},
 		}
@@ -240,6 +245,42 @@ func (s *ConversationServer) errorMessage(sessionID, code, msg string) *assistan
 			},
 		},
 	}
+}
+
+func (s *ConversationServer) handleReminderIntent(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	text := ""
+	if v, ok := state.Entities["text"]; ok {
+		if strVal := v.GetStringValue(); strVal != "" {
+			text = strVal
+		}
+	}
+	if text == "" {
+		// Fallback: use the full user utterance as reminder text.
+		text = msg.GetText()
+	}
+
+	req := &assistantpb.CreateReminderRequest{
+		UserId: state.UserID,
+		Text:   text,
+	}
+
+	resp, err := s.reminderClient.CreateReminder(ctx, req)
+	if err != nil {
+		return s.errorMessage(state.SessionID, "reminder_unavailable", "reminder service error"), err
+	}
+
+	state.Status = StatusCompleted
+
+	ack := "Created reminder: \"" + resp.GetReminder().GetText() + "\" at " + resp.GetReminder().GetDatetime().AsTime().Format(time.RFC3339)
+
+	return &assistantpb.ServerMessage{
+		SessionId: state.SessionID,
+		Payload: &assistantpb.ServerMessage_Text{
+			Text: &assistantpb.TextResponse{
+				Text: ack,
+			},
+		},
+	}, nil
 }
 
 // processCollecting handles dialog turns when we are missing some entities for the current intent.
