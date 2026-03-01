@@ -33,6 +33,14 @@ services:
     ports:
       - "50055:50055"
 
+  booking:
+    build:
+      context: .
+      dockerfile: services/booking/Dockerfile
+    container_name: nlp-booking
+    ports:
+      - "50056:50056"
+
   orchestrator:
     build:
       context: .
@@ -42,6 +50,8 @@ services:
       - classifier
       - extractor
       - weather
+      - reminder
+      - booking
       - redis
       - jaeger
     environment:

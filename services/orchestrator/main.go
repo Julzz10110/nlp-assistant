@@ -104,6 +104,18 @@ func main() {
 	}
 	defer weatherConn.Close()
 
+	bookingConn, err := grpc.DialContext(
+		ctx,
+		cfg.Services.Booking.Address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor()),
+	)
+	if err != nil {
+		logger.WithError(err).Fatal("failed to connect booking service")
+	}
+	defer bookingConn.Close()
+
 	var stateStore StateStore = NewInMemoryStateStore()
 	if cfg.Redis.Address != "" {
 		redisStore := NewRedisStateStore(cfg)
@@ -126,6 +138,7 @@ func main() {
 		assistantpb.NewEntityExtractorClient(extractorConn),
 		assistantpb.NewWeatherServiceClient(weatherConn),
 		assistantpb.NewReminderServiceClient(reminderConn),
+		assistantpb.NewBookingServiceClient(bookingConn),
 	)
 	assistantpb.RegisterConversationOrchestratorServer(server, orchestratorSrv)
 

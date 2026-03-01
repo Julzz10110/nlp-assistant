@@ -14,19 +14,20 @@ This repository implements the **Phase 1 MVP** of the larger specification: orch
   - Calls NLP microservices:
     - `IntentClassifier` — determines user intent.
     - `EntityExtractor` — extracts entities (e.g. `location`).
-  - Invokes business service:
-    - `WeatherService` — returns a synthetic weather response.
+  - Invokes business services:
+    - `WeatherService` — synthetic weather.
+    - `ReminderService` — create/list/cancel reminders.
+    - `BookingService` — reserve/confirm/cancel table bookings (Saga: Reserve → Confirm; on failure, Cancel as compensation).
   - Emits OpenTelemetry spans with semantic attributes (session, user, intent, etc.).
 
 - **NLP microservices**
-  - **Classifier (`services/classifier`)**
-    - Rule‑based: detects `get_weather` intent when the message contains words like `"weather"` or `"rain"`.
-  - **Entity Extractor (`services/extractor`)**
-    - Rule‑based: extracts `location = "Tokyo"` when the utterance contains `"tokyo"`.
+  - **Classifier (`services/classifier`)** — rule‑based: `get_weather`, `create_reminder`, `book_table`.
+  - **Entity Extractor (`services/extractor`)** — rule‑based: `location`, `text`, `place`, `persons`.
 
-- **Business service**
-  - **Weather (`services/weather`)**
-    - Read‑only service that generates pseudo‑random weather for the requested location and date.
+- **Business services**
+  - **Weather (`services/weather`)** — synthetic weather.
+  - **Reminder (`services/reminder`)** — in‑memory reminders.
+  - **Booking (`services/booking`)** — in‑memory bookings; Reserve/Confirm/Cancel for Saga.
 
 - **Observability**
   - **OpenTelemetry** for tracing (gRPC server + client interceptors).
@@ -45,8 +46,12 @@ Key services:
   - `Classify(ClassifyRequest) returns (ClassifyResponse)`
 - `EntityExtractor`
   - `Extract(ExtractRequest) returns (ExtractResponse)`
-- `WeatherService`
-  - `GetWeather(WeatherRequest) returns (WeatherResponse)`
+- `WeatherService` — `GetWeather(...)`
+- `ReminderService` — `CreateReminder`, `ListReminders`, `CancelReminder`
+- `BookingService` — `Reserve`, `Confirm`, `Cancel` (Saga participant)
+
+After editing `api/proto/assistant.proto`, regenerate Go code so that `assistantpb` gets types like `Booking`, `BookingServiceClient`, etc.
+
 
 ### Tech stack
 
@@ -55,30 +60,6 @@ Key services:
 - **State management**: in‑memory state store in orchestrator (interface designed to be backed by Redis later)
 - **Observability**: OpenTelemetry SDK + Jaeger
 - **Containerization**: Docker + Docker Compose
-
-### Project structure
-
-```text
-.
-├── api/
-│   └── proto/
-│       ├── assistant.proto          # Protobuf contracts
-│       └── assistantpb/             # Generated Go code
-├── config/
-│   └── orchestrator.yaml            # Orchestrator configuration (ports, service addresses, OTEL)
-├── internal/
-│   ├── config/                      # YAML config loading
-│   └── telemetry/                   # OpenTelemetry initialization helper
-├── services/
-│   ├── orchestrator/                # Core orchestrator (FSM + routing + OTel)
-│   ├── classifier/                  # Rule-based intent classifier
-│   ├── extractor/                   # Rule-based entity extractor
-│   ├── weather/                     # Weather business service
-│   └── client/                      # Console gRPC client
-├── docker-compose.yaml
-├── go.mod
-└── go.sum
-```
 
 ### Running locally without Docker
 
@@ -90,10 +71,12 @@ Requirements:
 From the project root:
 
 ```bash
-# 1. Start NLP services and weather service (in separate terminals)
+# 1. Start NLP and business services (in separate terminals)
 go run ./services/classifier
 go run ./services/extractor
 go run ./services/weather
+go run ./services/reminder
+go run ./services/booking
 
 # 2. Start orchestrator
 go run ./services/orchestrator

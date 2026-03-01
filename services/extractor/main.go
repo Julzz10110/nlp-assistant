@@ -37,7 +37,6 @@ func (s *server) Extract(ctx context.Context, req *assistantpb.ExtractRequest) (
 	}
 
 	// For create_reminder intent, use the whole utterance as reminder text
-	// (in a real system this would be more sophisticated).
 	if req.GetIntent() == "create_reminder" {
 		entities["text"] = &assistantpb.EntityValue{
 			Value: &assistantpb.EntityValue_StringValue{
@@ -45,6 +44,28 @@ func (s *server) Extract(ctx context.Context, req *assistantpb.ExtractRequest) (
 			},
 			Confidence: 1.0,
 			SourceText: req.GetUtterance(),
+		}
+	}
+
+	// For book_table: naive extraction of place (e.g. "La Scala") and persons (e.g. "two" -> 2, "2")
+	if req.GetIntent() == "book_table" {
+		if strings.Contains(text, "la scala") {
+			entities["place"] = &assistantpb.EntityValue{
+				Value: &assistantpb.EntityValue_StringValue{StringValue: "La Scala"},
+				Confidence: 0.9, SourceText: "la scala",
+			}
+		}
+		if strings.Contains(text, "two") || strings.Contains(text, "2") || strings.Contains(text, "for 2") {
+			entities["persons"] = &assistantpb.EntityValue{
+				Value: &assistantpb.EntityValue_IntValue{IntValue: 2},
+				Confidence: 0.9, SourceText: "two",
+			}
+		}
+		if strings.Contains(text, "four") || strings.Contains(text, "4") {
+			entities["persons"] = &assistantpb.EntityValue{
+				Value: &assistantpb.EntityValue_IntValue{IntValue: 4},
+				Confidence: 0.9, SourceText: "four",
+			}
 		}
 	}
 

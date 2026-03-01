@@ -181,3 +181,50 @@ message CancelReminderResponse {
   bool success = 1;
 }
 
+// ===================== Booking business service (Saga participant) =====================
+
+service BookingService {
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+}
+
+message Booking {
+  string id = 1;
+  string user_id = 2;
+  google.protobuf.Timestamp datetime = 3;
+  int32 persons = 4;
+  string place = 5;
+  string status = 6; // pending, confirmed, cancelled
+}
+
+message ReserveRequest {
+  string user_id = 1;
+  google.protobuf.Timestamp datetime = 2;
+  int32 persons = 3;
+  string place = 4;
+}
+
+message ReserveResponse {
+  Booking booking = 1;
+}
+
+message ConfirmRequest {
+  string user_id = 1;
+  string booking_id = 2;
+}
+
+message ConfirmResponse {
+  bool success = 1;
+  Booking booking = 2;
+}
+
+message CancelRequest {
+  string user_id = 1;
+  string booking_id = 2;
+}
+
+message CancelResponse {
+  bool success = 1;
+}
+

@@ -33,6 +33,9 @@ func (s *server) Classify(ctx context.Context, req *assistantpb.ClassifyRequest)
 	} else if strings.Contains(text, "remind") || strings.Contains(text, "reminder") {
 		intent = "create_reminder"
 		required = []string{"text"}
+	} else if strings.Contains(text, "book") || strings.Contains(text, "reserve") || strings.Contains(text, "table") || strings.Contains(text, "booking") {
+		intent = "book_table"
+		required = []string{"place", "persons"}
 	}
 
 	s.logger.WithFields(logrus.Fields{

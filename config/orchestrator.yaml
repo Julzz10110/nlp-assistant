@@ -24,6 +24,10 @@ services:
     address: "reminder:50055"
     timeout: 800ms
     retries: 2
+  booking:
+    address: "booking:50056"
+    timeout: 2s
+    retries: 2
 
 otel:
   exporter: "otlp_http"

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type ConversationServer struct {
 	extractor      assistantpb.EntityExtractorClient
 	weatherClient  assistantpb.WeatherServiceClient
 	reminderClient assistantpb.ReminderServiceClient
+	bookingClient  assistantpb.BookingServiceClient
 }
 
 func NewConversationServer(
@@ -33,6 +35,7 @@ func NewConversationServer(
 	extractor assistantpb.EntityExtractorClient,
 	weather assistantpb.WeatherServiceClient,
 	reminder assistantpb.ReminderServiceClient,
+	booking assistantpb.BookingServiceClient,
 ) *ConversationServer {
 	return &ConversationServer{
 		logger:         logger,
@@ -41,6 +44,7 @@ func NewConversationServer(
 		extractor:      extractor,
 		weatherClient:  weather,
 		reminderClient: reminder,
+		bookingClient:  booking,
 	}
 }
 
@@ -165,12 +169,14 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 		serverMsg, err = s.handleWeatherIntent(ctx, state, msg)
 	case "create_reminder":
 		serverMsg, err = s.handleReminderIntent(ctx, state, msg)
+	case "book_table":
+		serverMsg, err = s.handleBookingIntent(ctx, state, msg)
 	default:
 		serverMsg = &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
 			Payload: &assistantpb.ServerMessage_Text{
 				Text: &assistantpb.TextResponse{
-					Text: "For now I can answer weather and reminder questions.",
+					Text: "I can do weather, reminders, and table booking.",
 				},
 			},
 		}
@@ -283,6 +289,55 @@ func (s *ConversationServer) handleReminderIntent(ctx context.Context, state *Se
 	}, nil
 }
 
+func (s *ConversationServer) handleBookingIntent(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	place := ""
+	if v, ok := state.Entities["place"]; ok {
+		place = v.GetStringValue()
+	}
+	persons := int32(2)
+	if v, ok := state.Entities["persons"]; ok {
+		persons = int32(v.GetIntValue())
+		if persons < 1 {
+			persons = 2
+		}
+	}
+	var missing []string
+	if place == "" {
+		missing = append(missing, "place")
+	}
+	if len(missing) > 0 {
+		state.MissingEntities = missing
+		state.Status = StatusCollecting
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Confirmation{
+				Confirmation: &assistantpb.ConfirmationRequest{
+					Question: "Where would you like to book? (e.g. La Scala)",
+				},
+			},
+		}, nil
+	}
+	state.Status = StatusConfirming
+	state.MissingEntities = nil
+	q := "Book a table at " + place + " for " + formatPersons(persons) + ". Is that correct? (yes/no)"
+	if err := s.stateStore.SaveSession(ctx, state); err != nil {
+		return s.errorMessage(state.SessionID, "internal", "failed to save session"), err
+	}
+	return &assistantpb.ServerMessage{
+		SessionId: state.SessionID,
+		Payload: &assistantpb.ServerMessage_Confirmation{
+			Confirmation: &assistantpb.ConfirmationRequest{Question: q},
+		},
+	}, nil
+}
+
+func formatPersons(n int32) string {
+	if n == 1 {
+		return "1 person"
+	}
+	return fmt.Sprintf("%d people", n)
+}
+
 // processCollecting handles dialog turns when we are missing some entities for the current intent.
 // For Phase 1 it only collects the "location" entity for the weather intent.
 func (s *ConversationServer) processCollecting(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
@@ -300,16 +355,23 @@ func (s *ConversationServer) processCollecting(ctx context.Context, state *Sessi
 		state.Entities[k] = v
 	}
 
-	// Check whether we now have a location.
+	switch state.CurrentIntent {
+	case "get_weather":
+		return s.processCollectingWeather(ctx, state)
+	case "book_table":
+		return s.processCollectingBooking(ctx, state)
+	default:
+		// Fallback: treat as weather (legacy)
+		return s.processCollectingWeather(ctx, state)
+	}
+}
+
+func (s *ConversationServer) processCollectingWeather(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
 	location := ""
 	if v, ok := state.Entities["location"]; ok {
-		if strVal := v.GetStringValue(); strVal != "" {
-			location = strVal
-		}
+		location = v.GetStringValue()
 	}
-
 	if location == "" {
-		// Still missing location – stay in COLLECTING and ask again.
 		state.Status = StatusCollecting
 		state.MissingEntities = []string{"location"}
 		return &assistantpb.ServerMessage{
@@ -321,23 +383,51 @@ func (s *ConversationServer) processCollecting(ctx context.Context, state *Sessi
 			},
 		}, s.stateStore.SaveSession(ctx, state)
 	}
-
-	// We have all required entities for weather – move to CONFIRMING.
 	state.Status = StatusConfirming
 	state.MissingEntities = nil
-
 	question := "You want to know the weather in " + location + ". Is that correct? (yes/no)"
 	if err := s.stateStore.SaveSession(ctx, state); err != nil {
 		return s.errorMessage(state.SessionID, "internal", "failed to save session state"), err
 	}
-
 	return &assistantpb.ServerMessage{
 		SessionId: state.SessionID,
-		Payload: &assistantpb.ServerMessage_Confirmation{
-			Confirmation: &assistantpb.ConfirmationRequest{
-				Question: question,
+		Payload:   &assistantpb.ServerMessage_Confirmation{Confirmation: &assistantpb.ConfirmationRequest{Question: question}},
+	}, nil
+}
+
+func (s *ConversationServer) processCollectingBooking(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
+	place := ""
+	if v, ok := state.Entities["place"]; ok {
+		place = v.GetStringValue()
+	}
+	persons := int32(2)
+	if v, ok := state.Entities["persons"]; ok {
+		persons = int32(v.GetIntValue())
+		if persons < 1 {
+			persons = 2
+		}
+	}
+	if place == "" {
+		state.Status = StatusCollecting
+		state.MissingEntities = []string{"place"}
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Confirmation{
+				Confirmation: &assistantpb.ConfirmationRequest{
+					Question: "Where would you like to book? (e.g. La Scala)",
+				},
 			},
-		},
+		}, s.stateStore.SaveSession(ctx, state)
+	}
+	state.Status = StatusConfirming
+	state.MissingEntities = nil
+	q := "Book a table at " + place + " for " + formatPersons(persons) + ". Is that correct? (yes/no)"
+	if err := s.stateStore.SaveSession(ctx, state); err != nil {
+		return s.errorMessage(state.SessionID, "internal", "failed to save session"), err
+	}
+	return &assistantpb.ServerMessage{
+		SessionId: state.SessionID,
+		Payload:   &assistantpb.ServerMessage_Confirmation{Confirmation: &assistantpb.ConfirmationRequest{Question: q}},
 	}, nil
 }
 
@@ -362,14 +452,29 @@ func (s *ConversationServer) processConfirming(ctx context.Context, state *Sessi
 
 	if isNo {
 		// Reset collected entities and go back to COLLECTING.
+		if state.CurrentIntent == "book_table" {
+			delete(state.Entities, "place")
+			delete(state.Entities, "persons")
+			state.Status = StatusCollecting
+			state.MissingEntities = []string{"place"}
+			if err := s.stateStore.SaveSession(ctx, state); err != nil {
+				return s.errorMessage(state.SessionID, "internal", "failed to save session state"), err
+			}
+			return &assistantpb.ServerMessage{
+				SessionId: state.SessionID,
+				Payload: &assistantpb.ServerMessage_Confirmation{
+					Confirmation: &assistantpb.ConfirmationRequest{
+						Question: "Okay, where would you like to book?",
+					},
+				},
+			}, nil
+		}
 		delete(state.Entities, "location")
 		state.Status = StatusCollecting
 		state.MissingEntities = []string{"location"}
-
 		if err := s.stateStore.SaveSession(ctx, state); err != nil {
 			return s.errorMessage(state.SessionID, "internal", "failed to save session state"), err
 		}
-
 		return &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
 			Payload: &assistantpb.ServerMessage_Confirmation{
@@ -381,13 +486,67 @@ func (s *ConversationServer) processConfirming(ctx context.Context, state *Sessi
 	}
 
 	// isYes: execute the intent using the already collected entities.
-	resp, err := s.handleWeatherIntent(ctx, state, msg)
-	if err != nil {
-		return resp, err
+	switch state.CurrentIntent {
+	case "get_weather":
+		return s.handleWeatherIntent(ctx, state, msg)
+	case "book_table":
+		return s.runBookingSaga(ctx, state)
+	default:
+		return s.handleWeatherIntent(ctx, state, msg)
+	}
+}
+
+// runBookingSaga runs Reserve then Confirm; on Confirm failure it compensates by Cancel.
+func (s *ConversationServer) runBookingSaga(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
+	place := ""
+	if v, ok := state.Entities["place"]; ok {
+		place = v.GetStringValue()
+	}
+	persons := int32(2)
+	if v, ok := state.Entities["persons"]; ok {
+		persons = int32(v.GetIntValue())
+		if persons < 1 {
+			persons = 2
+		}
+	}
+	if place == "" {
+		return s.errorMessage(state.SessionID, "booking", "missing place"), nil
 	}
 
-	// handleWeatherIntent already sets the status and saves the session.
-	return resp, nil
+	// Step 1: Reserve
+	reserveResp, err := s.bookingClient.Reserve(ctx, &assistantpb.ReserveRequest{
+		UserId:   state.UserID,
+		Datetime: timestamppb.New(time.Now().UTC().Add(24 * time.Hour)),
+		Persons:  persons,
+		Place:    place,
+	})
+	if err != nil {
+		return s.errorMessage(state.SessionID, "booking_unavailable", "reserve failed: "+err.Error()), err
+	}
+	bookingID := reserveResp.GetBooking().GetId()
+
+	// Step 2: Confirm
+	confirmResp, err := s.bookingClient.Confirm(ctx, &assistantpb.ConfirmRequest{
+		UserId:    state.UserID,
+		BookingId: bookingID,
+	})
+	if err != nil {
+		// Compensate: cancel the reservation
+		_, _ = s.bookingClient.Cancel(ctx, &assistantpb.CancelRequest{UserId: state.UserID, BookingId: bookingID})
+		return s.errorMessage(state.SessionID, "booking_confirm_failed", "confirmation failed, reservation cancelled"), err
+	}
+	if !confirmResp.GetSuccess() {
+		_, _ = s.bookingClient.Cancel(ctx, &assistantpb.CancelRequest{UserId: state.UserID, BookingId: bookingID})
+		return s.errorMessage(state.SessionID, "booking_confirm_failed", "confirmation failed, reservation cancelled"), nil
+	}
+
+	state.Status = StatusCompleted
+	_ = s.stateStore.SaveSession(ctx, state)
+	text := "Done! Your table at " + place + " for " + formatPersons(persons) + " is confirmed (id: " + bookingID + ")."
+	return &assistantpb.ServerMessage{
+		SessionId: state.SessionID,
+		Payload:   &assistantpb.ServerMessage_Text{Text: &assistantpb.TextResponse{Text: text}},
+	}, nil
 }
 
 
