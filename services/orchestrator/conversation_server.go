@@ -16,6 +16,14 @@ import (
 	assistantpb "github.com/Julzz10110/nlp-assistant/api/proto/assistantpb"
 )
 
+const minIntentConfidence = 0.55
+
+var supportedIntents = map[string]struct{}{
+	"get_weather":     {},
+	"create_reminder": {},
+	"book_table":      {},
+}
+
 type ConversationServer struct {
 	assistantpb.UnimplementedConversationOrchestratorServer
 
@@ -155,16 +163,39 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 	// For MVP: always call NLP services and try to detect intent and entities.
 	state.Status = StatusProcessing
 
+	var previousIntents []string
+	if state.CurrentIntent != "" {
+		previousIntents = append(previousIntents, state.CurrentIntent)
+	}
 	classResp, err := s.classifier.Classify(ctx, &assistantpb.ClassifyRequest{
 		Utterance:       msg.GetText(),
-		PreviousIntents: nil,
+		PreviousIntents: previousIntents,
 	})
 	if err != nil {
 		return s.errorMessage(state.SessionID, "classifier_unavailable", "classifier service error, falling back"), err
 	}
 
-	state.CurrentIntent = classResp.GetIntentName()
-	assistantIntentConfidence.WithLabelValues(state.CurrentIntent).Observe(float64(classResp.GetConfidence()))
+	intentName := classResp.GetIntentName()
+	confidence := classResp.GetConfidence()
+	if _, ok := supportedIntents[intentName]; !ok || confidence < minIntentConfidence {
+		assistantFallbackTotal.WithLabelValues("low_confidence_or_unsupported_intent").Inc()
+		state.Status = StatusCompleted
+		if saveErr := s.stateStore.SaveSession(ctx, state); saveErr != nil {
+			return s.errorMessage(state.SessionID, "internal", "failed to save session"), saveErr
+		}
+		return &assistantpb.ServerMessage{
+			SessionId: state.SessionID,
+			Payload: &assistantpb.ServerMessage_Text{
+				Text: &assistantpb.TextResponse{
+					Text: "I am not fully sure what you need. I can help with weather, reminders, and table booking. Please rephrase your request.",
+				},
+			},
+		}, nil
+	}
+
+	state.CurrentIntent = intentName
+	assistantIntentDetectedTotal.WithLabelValues(state.CurrentIntent).Inc()
+	assistantIntentConfidence.WithLabelValues(state.CurrentIntent).Observe(float64(confidence))
 
 	extractResp, err := s.extractor.Extract(ctx, &assistantpb.ExtractRequest{
 		Utterance:        msg.GetText(),
@@ -182,11 +213,11 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 	var serverMsg *assistantpb.ServerMessage
 	switch classResp.GetIntentName() {
 	case "get_weather":
-		serverMsg, err = s.handleWeatherIntent(ctx, state, msg)
+		serverMsg, err = s.handleWeatherIntent(ctx, state)
 	case "create_reminder":
 		serverMsg, err = s.handleReminderIntent(ctx, state, msg)
 	case "book_table":
-		serverMsg, err = s.handleBookingIntent(ctx, state, msg)
+		serverMsg, err = s.handleBookingIntent(ctx, state)
 	default:
 		serverMsg = &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
@@ -209,7 +240,7 @@ func (s *ConversationServer) processOngoing(ctx context.Context, state *SessionS
 	return s.processNewOrCompleted(ctx, state, msg)
 }
 
-func (s *ConversationServer) handleWeatherIntent(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+func (s *ConversationServer) handleWeatherIntent(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
 	location := ""
 	if v, ok := state.Entities["location"]; ok {
 		if strVal := v.GetStringValue(); strVal != "" {
@@ -305,7 +336,7 @@ func (s *ConversationServer) handleReminderIntent(ctx context.Context, state *Se
 	}, nil
 }
 
-func (s *ConversationServer) handleBookingIntent(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+func (s *ConversationServer) handleBookingIntent(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
 	place := ""
 	if v, ok := state.Entities["place"]; ok {
 		place = v.GetStringValue()
@@ -357,6 +388,10 @@ func formatPersons(n int32) string {
 // processCollecting handles dialog turns when we are missing some entities for the current intent.
 // For Phase 1 it only collects the "location" entity for the weather intent.
 func (s *ConversationServer) processCollecting(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	if switched, resp, err := s.tryIntentSwitch(ctx, state, msg); switched {
+		return resp, err
+	}
+
 	// Re-run entity extraction using the latest user utterance and merge entities.
 	extractResp, err := s.extractor.Extract(ctx, &assistantpb.ExtractRequest{
 		Utterance:        msg.GetText(),
@@ -455,6 +490,9 @@ func (s *ConversationServer) processConfirming(ctx context.Context, state *Sessi
 	isNo := answer == "no" || answer == "n" || answer == "nope"
 
 	if !isYes && !isNo {
+		if switched, resp, err := s.tryIntentSwitch(ctx, state, msg); switched {
+			return resp, err
+		}
 		// Ask the user to answer explicitly with yes or no.
 		return &assistantpb.ServerMessage{
 			SessionId: state.SessionID,
@@ -504,12 +542,40 @@ func (s *ConversationServer) processConfirming(ctx context.Context, state *Sessi
 	// isYes: execute the intent using the already collected entities.
 	switch state.CurrentIntent {
 	case "get_weather":
-		return s.handleWeatherIntent(ctx, state, msg)
+		return s.handleWeatherIntent(ctx, state)
 	case "book_table":
 		return s.runBookingSaga(ctx, state)
 	default:
-		return s.handleWeatherIntent(ctx, state, msg)
+		return s.handleWeatherIntent(ctx, state)
 	}
+}
+
+func (s *ConversationServer) tryIntentSwitch(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (bool, *assistantpb.ServerMessage, error) {
+	classResp, err := s.classifier.Classify(ctx, &assistantpb.ClassifyRequest{
+		Utterance:       msg.GetText(),
+		PreviousIntents: []string{state.CurrentIntent},
+	})
+	if err != nil {
+		return false, nil, nil
+	}
+
+	newIntent := classResp.GetIntentName()
+	confidence := classResp.GetConfidence()
+	if newIntent == "" || newIntent == state.CurrentIntent || confidence < minIntentConfidence {
+		return false, nil, nil
+	}
+	if _, ok := supportedIntents[newIntent]; !ok {
+		return false, nil, nil
+	}
+	assistantIntentDetectedTotal.WithLabelValues(newIntent).Inc()
+
+	// If user asks for a clearly different task mid-flow, switch the intent and start fresh for this turn.
+	state.CurrentIntent = newIntent
+	state.Status = StatusProcessing
+	state.MissingEntities = nil
+	state.Entities = make(map[string]*assistantpb.EntityValue)
+	resp, procErr := s.processNewOrCompleted(ctx, state, msg)
+	return true, resp, procErr
 }
 
 // runBookingSaga runs Reserve then Confirm; on Confirm failure it compensates by Cancel.

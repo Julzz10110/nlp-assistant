@@ -36,6 +36,22 @@ var (
 		[]string{"intent"},
 	)
 
+	assistantIntentDetectedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "assistant_intent_detected_total",
+			Help: "Total number of detected intents grouped by intent.",
+		},
+		[]string{"intent"},
+	)
+
+	assistantFallbackTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "assistant_fallback_total",
+			Help: "Total number of fallback responses grouped by reason.",
+		},
+		[]string{"reason"},
+	)
+
 	assistantActiveSessions = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "assistant_sessions_active",
@@ -67,6 +83,8 @@ func initMetrics() {
 			assistantRequestsTotal,
 			assistantRequestDuration,
 			assistantIntentConfidence,
+			assistantIntentDetectedTotal,
+			assistantFallbackTotal,
 			assistantActiveSessions,
 			assistantSagaDuration,
 			assistantSagaFailures,
