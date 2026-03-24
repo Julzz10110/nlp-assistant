@@ -31,7 +31,14 @@ This repository implements the **Phase 1 MVP** of the larger specification: orch
 
 - **Observability**
   - **OpenTelemetry** for tracing (gRPC server + client interceptors).
-  - **Jaeger** (all‑in‑one) for trace visualization (exposed via Docker Compose).
+  - **Prometheus metrics** from orchestrator (`/metrics` on port `9091`):
+    - `assistant_requests_total`
+    - `assistant_request_duration_seconds`
+    - `assistant_intent_confidence`
+    - `assistant_sessions_active`
+    - `assistant_saga_duration_seconds`
+    - `assistant_saga_failures_total`
+  - **Jaeger**, **Prometheus**, **Grafana** in Docker Compose.
 
 ### Protobuf contracts
 
@@ -58,7 +65,7 @@ After editing `api/proto/assistant.proto`, regenerate Go code so that `assistant
 - **Language**: Go
 - **RPC**: gRPC + Protocol Buffers
 - **State management**: in‑memory state store in orchestrator (interface designed to be backed by Redis later)
-- **Observability**: OpenTelemetry SDK + Jaeger
+- **Observability**: OpenTelemetry SDK + Prometheus + Jaeger + Grafana
 - **Containerization**: Docker + Docker Compose
 
 ### Running locally without Docker
@@ -115,6 +122,8 @@ This will start:
 - `nlp-weather` on `50054`
 - `nlp-orchestrator` on `50051`
 - `nlp-jaeger` with UI on `16686` and OTLP HTTP on `4318`
+- `nlp-prometheus` on `9090`
+- `nlp-grafana` on `3000`
 
 After the stack is running, you can connect the console client from your host:
 
@@ -143,17 +152,25 @@ If `location` cannot be inferred, orchestrator sends a `ConfirmationRequest` ask
 
 > `For which location do you need the weather?`
 
-### Observability (Jaeger)
+### Observability
 
-When running with Docker Compose, Jaeger is available at:
+When running with Docker Compose:
 
 - `http://localhost:16686`
+- `http://localhost:9090` (Prometheus)
+- `http://localhost:3000` (Grafana, default admin/admin)
 
-Search for the `orchestrator` service to see full traces:
+In Jaeger, search for the `orchestrator` service to see full traces:
 
 - Conversation spans for each dialog turn.
 - Child spans for NLP calls and weather service.
 - Custom attributes like `assistant.session_id`, `assistant.user_id`, and intent‑related data.
+
+In Prometheus, query metrics like:
+
+- `assistant_requests_total`
+- `assistant_request_duration_seconds_bucket`
+- `assistant_saga_failures_total`
 
 ### Future extensions
 

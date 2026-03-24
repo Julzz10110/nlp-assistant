@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -37,6 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+	initMetrics()
 
 	shutdown, err := telemetry.InitTracerProvider(ctx, telemetry.Options{
 		ServiceName: cfg.Service.Name,
@@ -156,6 +159,23 @@ func main() {
 		}
 	}()
 
+	metricsPort := os.Getenv("ORCHESTRATOR_METRICS_PORT")
+	if metricsPort == "" {
+		metricsPort = "9091"
+	}
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsServer := &http.Server{
+		Addr:    ":" + metricsPort,
+		Handler: metricsMux,
+	}
+	go func() {
+		logger.WithField("addr", ":"+metricsPort).Info("orchestrator metrics listening")
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.WithError(err).Error("metrics server stopped")
+		}
+	}()
+
 	<-ctx.Done()
 	logger.Info("shutting down orchestrator...")
 
@@ -171,5 +191,8 @@ func main() {
 		logger.Warn("force stop gRPC server")
 		server.Stop()
 	}
+	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelShutdown()
+	_ = metricsServer.Shutdown(ctxShutdown)
 }
 

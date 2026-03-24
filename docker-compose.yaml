@@ -56,8 +56,10 @@ services:
       - jaeger
     environment:
       - ORCHESTRATOR_CONFIG=/app/config/orchestrator.yaml
+      - ORCHESTRATOR_METRICS_PORT=9091
     ports:
       - "50051:50051"
+      - "9091:9091"
 
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -71,4 +73,24 @@ services:
     container_name: nlp-redis
     ports:
       - "6379:6379"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nlp-prometheus
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - orchestrator
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nlp-grafana
+    volumes:
+      - ./deploy/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
 

@@ -98,6 +98,7 @@ func (s *ConversationServer) GetHistory(ctx context.Context, req *assistantpb.Hi
 }
 
 func (s *ConversationServer) handleClientMessage(ctx context.Context, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
+	startedAt := time.Now()
 	logger := s.logger.WithFields(logrus.Fields{
 		"session_id": msg.GetSessionId(),
 		"user_id":    msg.GetUserId(),
@@ -108,6 +109,7 @@ func (s *ConversationServer) handleClientMessage(ctx context.Context, msg *assis
 	if err != nil {
 		return s.errorMessage(msg.GetSessionId(), "internal", "failed to load session"), err
 	}
+	isNewSession := state == nil
 	if state == nil {
 		state = &SessionState{
 			SessionID: msg.GetSessionId(),
@@ -122,18 +124,31 @@ func (s *ConversationServer) handleClientMessage(ctx context.Context, msg *assis
 	state.History = append(state.History, msg)
 	state.UpdatedAt = time.Now().UTC()
 
+	var (
+		resp    *assistantpb.ServerMessage
+		handleErr error
+	)
 	switch state.Status {
 	case StatusNew, StatusCompleted:
-		return s.processNewOrCompleted(ctx, state, msg)
+		resp, handleErr = s.processNewOrCompleted(ctx, state, msg)
 	case StatusProcessing:
-		return s.processNewOrCompleted(ctx, state, msg)
+		resp, handleErr = s.processNewOrCompleted(ctx, state, msg)
 	case StatusCollecting:
-		return s.processCollecting(ctx, state, msg)
+		resp, handleErr = s.processCollecting(ctx, state, msg)
 	case StatusConfirming:
-		return s.processConfirming(ctx, state, msg)
+		resp, handleErr = s.processConfirming(ctx, state, msg)
 	default:
-		return s.errorMessage(msg.GetSessionId(), "invalid_state", "unknown dialog state"), nil
+		resp, handleErr = s.errorMessage(msg.GetSessionId(), "invalid_state", "unknown dialog state"), nil
 	}
+	status := "ok"
+	if handleErr != nil {
+		status = "error"
+	}
+	observeRequest(state.CurrentIntent, status, startedAt)
+	if isNewSession {
+		assistantActiveSessions.Inc()
+	}
+	return resp, handleErr
 }
 
 func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *SessionState, msg *assistantpb.ClientMessage) (*assistantpb.ServerMessage, error) {
@@ -149,6 +164,7 @@ func (s *ConversationServer) processNewOrCompleted(ctx context.Context, state *S
 	}
 
 	state.CurrentIntent = classResp.GetIntentName()
+	assistantIntentConfidence.WithLabelValues(state.CurrentIntent).Observe(float64(classResp.GetConfidence()))
 
 	extractResp, err := s.extractor.Extract(ctx, &assistantpb.ExtractRequest{
 		Utterance:        msg.GetText(),
@@ -498,6 +514,7 @@ func (s *ConversationServer) processConfirming(ctx context.Context, state *Sessi
 
 // runBookingSaga runs Reserve then Confirm; on Confirm failure it compensates by Cancel.
 func (s *ConversationServer) runBookingSaga(ctx context.Context, state *SessionState) (*assistantpb.ServerMessage, error) {
+	sagaStartedAt := time.Now()
 	place := ""
 	if v, ok := state.Entities["place"]; ok {
 		place = v.GetStringValue()
@@ -521,6 +538,8 @@ func (s *ConversationServer) runBookingSaga(ctx context.Context, state *SessionS
 		Place:    place,
 	})
 	if err != nil {
+		assistantSagaFailures.WithLabelValues("booking", "reserve").Inc()
+		assistantSagaDuration.WithLabelValues("booking", "failed").Observe(time.Since(sagaStartedAt).Seconds())
 		return s.errorMessage(state.SessionID, "booking_unavailable", "reserve failed: "+err.Error()), err
 	}
 	bookingID := reserveResp.GetBooking().GetId()
@@ -533,15 +552,20 @@ func (s *ConversationServer) runBookingSaga(ctx context.Context, state *SessionS
 	if err != nil {
 		// Compensate: cancel the reservation
 		_, _ = s.bookingClient.Cancel(ctx, &assistantpb.CancelRequest{UserId: state.UserID, BookingId: bookingID})
+		assistantSagaFailures.WithLabelValues("booking", "confirm").Inc()
+		assistantSagaDuration.WithLabelValues("booking", "compensated").Observe(time.Since(sagaStartedAt).Seconds())
 		return s.errorMessage(state.SessionID, "booking_confirm_failed", "confirmation failed, reservation cancelled"), err
 	}
 	if !confirmResp.GetSuccess() {
 		_, _ = s.bookingClient.Cancel(ctx, &assistantpb.CancelRequest{UserId: state.UserID, BookingId: bookingID})
+		assistantSagaFailures.WithLabelValues("booking", "confirm").Inc()
+		assistantSagaDuration.WithLabelValues("booking", "compensated").Observe(time.Since(sagaStartedAt).Seconds())
 		return s.errorMessage(state.SessionID, "booking_confirm_failed", "confirmation failed, reservation cancelled"), nil
 	}
 
 	state.Status = StatusCompleted
 	_ = s.stateStore.SaveSession(ctx, state)
+	assistantSagaDuration.WithLabelValues("booking", "completed").Observe(time.Since(sagaStartedAt).Seconds())
 	text := "Done! Your table at " + place + " for " + formatPersons(persons) + " is confirmed (id: " + bookingID + ")."
 	return &assistantpb.ServerMessage{
 		SessionId: state.SessionID,
