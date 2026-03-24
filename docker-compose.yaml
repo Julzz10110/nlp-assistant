@@ -89,6 +89,8 @@ services:
     container_name: nlp-grafana
     volumes:
       - ./deploy/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:
